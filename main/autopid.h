@@ -129,4 +129,13 @@ bool autopid_get_ecu_status(void);
 char* autopid_get_config(void);
 esp_err_t autopid_find_standard_pid(uint8_t protocol, char *available_pids, uint32_t available_pids_size) ;
 void autopid_request_data(void);
+
+/**
+ * @brief Get the latest computed value of an autopid sensor by name.
+ *
+ * @param name      Sensor/parameter name as configured in autopid.
+ * @param out_value Receives the latest value if available.
+ * @return true if a valid (non-stale) value was found, false otherwise.
+ */
+bool autopid_get_value(const char *name, float *out_value);
 #endif

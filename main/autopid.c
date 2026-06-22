@@ -965,6 +965,36 @@ char *autopid_data_read(void)
     return json_str;
 }
 
+bool autopid_get_value(const char *name, float *out_value)
+{
+    bool found = false;
+
+    if (!name || !out_value || !autopid_values || !autopid_values_mutex)
+    {
+        return false;
+    }
+
+    if (xSemaphoreTake(autopid_values_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
+        for (uint32_t i = 0; i < autopid_values_count; i++)
+        {
+            autopid_value_t *value = &autopid_values[i];
+            if (value->name && strcmp(value->name, name) == 0)
+            {
+                if (value->value != FLT_MAX)
+                {
+                    *out_value = value->value;
+                    found = true;
+                }
+                break;
+            }
+        }
+        xSemaphoreGive(autopid_values_mutex);
+    }
+
+    return found;
+}
+
 void autopid_data_publish(void) {
     if (!all_pids || !all_pids->mutex) {
         ESP_LOGE(TAG, "Invalid all_pids or mutex");

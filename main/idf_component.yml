@@ -1,6 +1,8 @@
 ## IDF Component Manager Manifest File
 dependencies:
   espressif/mdns: '*'
+  ## zlib provides gzip compression for the datalogger buffer
+  espressif/zlib: '^1.3.0'
   ## Required IDF version
   idf:
     version: '>=4.1.0'

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WiCAN Datalogger</title>
+<style>
+  :root { --bg:#1e2430; --card:#2a3140; --acc:#3b82f6; --txt:#e5e7eb; --mut:#9ca3af; }
+  * { box-sizing:border-box; }
+  body { font-family:system-ui,Segoe UI,Roboto,sans-serif; margin:0; background:var(--bg); color:var(--txt); }
+  .wrap { max-width:760px; margin:0 auto; padding:18px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p.sub { color:var(--mut); margin:0 0 18px; font-size:13px; }
+  .card { background:var(--card); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:15px; margin:0 0 12px; }
+  label { display:block; font-size:13px; color:var(--mut); margin:10px 0 4px; }
+  input[type=text], input[type=number], input[type=password], input[type=url] {
+    width:100%; padding:8px 10px; border-radius:6px; border:1px solid #3b4252;
+    background:#1b2130; color:var(--txt); font-size:14px;
+  }
+  .row { display:flex; gap:10px; flex-wrap:wrap; }
+  .row > div { flex:1; min-width:140px; }
+  .chk { display:flex; align-items:center; gap:8px; margin:12px 0; }
+  .chk input { width:18px; height:18px; }
+  .chk label { margin:0; color:var(--txt); }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:6px 4px; font-size:13px; }
+  th { color:var(--mut); font-weight:500; }
+  button { cursor:pointer; border:none; border-radius:6px; padding:8px 14px; font-size:14px; }
+  .btn { background:var(--acc); color:#fff; }
+  .btn-sm { background:#3b4252; color:var(--txt); padding:5px 10px; font-size:13px; }
+  .btn-del { background:#7f1d1d; color:#fff; padding:5px 9px; }
+  .bar { display:flex; gap:10px; align-items:center; margin-top:8px; }
+  #status { font-size:13px; color:var(--mut); }
+  .hint { font-size:12px; color:var(--mut); margin-top:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Datalogger</h1>
+  <p class="sub">Log selected PID values at a chosen frequency. Data is buffered, then uploaded to InfluxDB v1 over HTTPS when Wi-Fi is up, or written to the SD card (WiCAN Pro) when offline.</p>
+
+  <div class="card">
+    <div class="chk"><input type="checkbox" id="enabled"><label for="enabled">Enable datalogger</label></div>
+    <div class="chk"><input type="checkbox" id="compression"><label for="compression">Compress buffer (gzip) before upload / SD write</label></div>
+    <p class="hint">Values are sampled from the AutoPID engine, so set the protocol to AutoPID and configure your PIDs there first.</p>
+  </div>
+
+  <div class="card">
+    <h2>PIDs to log</h2>
+    <table>
+      <thead><tr><th style="width:70%">Sensor name (from AutoPID)</th><th>Freq (s)</th><th></th></tr></thead>
+      <tbody id="pidRows"></tbody>
+    </table>
+    <div class="bar"><button class="btn-sm" id="addPid">+ Add PID</button></div>
+    <p class="hint">Frequency 1&ndash;60 s. Names must match the AutoPID sensor names.</p>
+  </div>
+
+  <div class="card">
+    <h2>InfluxDB v1 (HTTPS)</h2>
+    <label for="url">Base URL</label>
+    <input type="url" id="url" placeholder="https://influx.example.com:8086">
+    <div class="row">
+      <div><label for="db">Database</label><input type="text" id="db" placeholder="wican"></div>
+      <div><label for="measurement">Measurement</label><input type="text" id="measurement" placeholder="obd"></div>
+    </div>
+    <div class="row">
+      <div><label for="user">Username</label><input type="text" id="user" autocomplete="off"></div>
+      <div><label for="pass">Password</label><input type="password" id="pass" autocomplete="new-password"></div>
+    </div>
+    <div class="chk"><input type="checkbox" id="insecure"><label for="insecure">Skip TLS hostname check (self-hosted certs)</label></div>
+  </div>
+
+  <div class="card">
+    <h2>Buffering</h2>
+    <div class="row">
+      <div><label for="flush_bytes">Flush at (bytes)</label><input type="number" id="flush_bytes" min="512" value="4096"></div>
+      <div><label for="max_delay_s">Max delay (s)</label><input type="number" id="max_delay_s" min="1" value="30"></div>
+      <div><label for="max_mem_bytes">Max buffer (bytes)</label><input type="number" id="max_mem_bytes" min="1024" value="32768"></div>
+    </div>
+    <div class="chk"><input type="checkbox" id="sd_enabled"><label for="sd_enabled">Write to SD card when offline (WiCAN Pro)</label></div>
+    <label for="sd_dir">SD directory</label>
+    <input type="text" id="sd_dir" placeholder="/sdcard/wican">
+  </div>
+
+  <div class="bar">
+    <button class="btn" id="save">Save</button>
+    <span id="status"></span>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function addPidRow(name, freq) {
+  const tr = document.createElement('tr');
+  tr.innerHTML =
+    '<td><input type="text" class="pid-name" list="pidlist" value="' + (name||'') + '"></td>' +
+    '<td><input type="number" class="pid-freq" min="1" max="60" value="' + (freq||5) + '" style="width:80px"></td>' +
+    '<td><button class="btn-del">x</button></td>';
+  tr.querySelector('.btn-del').onclick = () => tr.remove();
+  $('pidRows').appendChild(tr);
+}
+
+$('addPid').onclick = () => addPidRow('', 5);
+
+function fill(cfg) {
+  cfg = cfg || {};
+  $('enabled').checked = !!cfg.enabled;
+  $('compression').checked = cfg.compression !== false;
+  const inf = cfg.influx || {};
+  $('url').value = inf.url || '';
+  $('db').value = inf.db || 'wican';
+  $('measurement').value = inf.measurement || 'obd';
+  $('user').value = inf.username || '';
+  $('pass').value = inf.password || '';
+  $('insecure').checked = !!inf.insecure_tls;
+  const buf = cfg.buffer || {};
+  $('flush_bytes').value = buf.flush_bytes || 4096;
+  $('max_delay_s').value = buf.max_delay_s || 30;
+  $('max_mem_bytes').value = buf.max_mem_bytes || 32768;
+  const sd = cfg.sd || {};
+  $('sd_enabled').checked = sd.enabled !== false;
+  $('sd_dir').value = sd.dir || '/sdcard/wican';
+  $('pidRows').innerHTML = '';
+  (cfg.pids || []).forEach(p => addPidRow(p.name, p.freq));
+  if (!(cfg.pids || []).length) addPidRow('', 5);
+}
+
+function collect() {
+  const pids = [];
+  document.querySelectorAll('#pidRows tr').forEach(tr => {
+    const name = tr.querySelector('.pid-name').value.trim();
+    let freq = parseInt(tr.querySelector('.pid-freq').value, 10) || 5;
+    freq = Math.min(60, Math.max(1, freq));
+    if (name) pids.push({ name, freq });
+  });
+  return {
+    enabled: $('enabled').checked,
+    compression: $('compression').checked,
+    influx: {
+      url: $('url').value.trim(),
+      db: $('db').value.trim(),
+      measurement: $('measurement').value.trim() || 'obd',
+      username: $('user').value,
+      password: $('pass').value,
+      insecure_tls: $('insecure').checked
+    },
+    buffer: {
+      flush_bytes: parseInt($('flush_bytes').value, 10) || 4096,
+      max_delay_s: parseInt($('max_delay_s').value, 10) || 30,
+      max_mem_bytes: parseInt($('max_mem_bytes').value, 10) || 32768
+    },
+    sd: { enabled: $('sd_enabled').checked, dir: $('sd_dir').value.trim() || '/sdcard/wican' },
+    pids: pids
+  };
+}
+
+$('save').onclick = () => {
+  $('status').textContent = 'Saving...';
+  fetch('/store_datalogger', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(collect())
+  }).then(r => {
+    $('status').textContent = r.ok ? 'Saved. Applying...' : 'Save failed (' + r.status + ')';
+  }).catch(() => { $('status').textContent = 'Network error'; });
+};
+
+// Populate the sensor-name datalist from live AutoPID values.
+const dl = document.createElement('datalist');
+dl.id = 'pidlist';
+document.body.appendChild(dl);
+fetch('/autopid_data').then(r => r.json()).then(d => {
+  Object.keys(d || {}).forEach(k => {
+    const o = document.createElement('option'); o.value = k; dl.appendChild(o);
+  });
+}).catch(() => {});
+
+fetch('/load_datalogger').then(r => r.json()).then(fill).catch(() => fill({}));
+</script>
+</body>
+</html>

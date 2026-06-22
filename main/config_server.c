@@ -75,6 +75,7 @@
 #include "wc_mdns.h"
 #include "hw_config.h"
 #include "ha_webhooks.h"
+#include "datalogger.h"
 
 #define WIFI_CONNECTED_BIT			BIT0
 #define WS_CONNECTED_BIT			BIT1
@@ -96,6 +97,8 @@ static const char logo[] = {"<svg data-bbox=\"8.091 171.26 470.264 169.479\" ove
 
 extern const unsigned char homepage_start[] asm("_binary_homepage_full_html_start");
 extern const unsigned char homepage_end[]   asm("_binary_homepage_full_html_end");
+extern const unsigned char datalogger_html_start[] asm("_binary_datalogger_html_start");
+extern const unsigned char datalogger_html_end[]   asm("_binary_datalogger_html_end");
 
 static char can_datarate_str[11][7] = {
 								"5k",
@@ -540,6 +543,128 @@ static esp_err_t load_pid_auto_handler(httpd_req_t *req)
     httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
     free(buf);
 
+    return ESP_OK;
+}
+
+static esp_err_t datalogger_page_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html");
+    const size_t page_size = datalogger_html_end - datalogger_html_start;
+    esp_err_t ret = httpd_resp_send(req, (const char *)datalogger_html_start, page_size);
+    return (ret == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+static esp_err_t load_datalogger_handler(httpd_req_t *req)
+{
+    FILE *f = fopen(DATALOGGER_CONFIG_PATH, "r");
+    if (f == NULL)
+    {
+        /* No config yet: return an empty object so the page loads defaults. */
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{}", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long filesize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (filesize <= 0)
+    {
+        fclose(f);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{}", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
+
+    char *buf = malloc(filesize + 1);
+    if (!buf)
+    {
+        fclose(f);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    size_t read = fread(buf, 1, filesize, f);
+    fclose(f);
+
+    if (read != (size_t)filesize)
+    {
+        free(buf);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    buf[filesize] = 0;
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+    free(buf);
+
+    return ESP_OK;
+}
+
+static esp_err_t store_datalogger_handler(httpd_req_t *req)
+{
+    if (!req)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    size_t buf_size = req->content_len;
+    if (buf_size <= 0 || buf_size > 16384)
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid content length");
+        return ESP_FAIL;
+    }
+
+    char *buf = (char *)calloc(1, buf_size + 1);
+    if (!buf)
+    {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int received = httpd_req_recv(req, buf, buf_size);
+    if (received <= 0 || (size_t)received != buf_size)
+    {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive failed");
+        return ESP_FAIL;
+    }
+    buf[received] = '\0';
+
+    /* Validate JSON before persisting. */
+    cJSON *json = cJSON_Parse(buf);
+    if (!json)
+    {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+    cJSON_Delete(json);
+
+    FILE *f = fopen(DATALOGGER_CONFIG_PATH, "w");
+    if (!f)
+    {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Open failed");
+        return ESP_FAIL;
+    }
+
+    size_t written = fwrite(buf, 1, received, f);
+    fclose(f);
+    free(buf);
+
+    if (written != (size_t)received)
+    {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+        return ESP_FAIL;
+    }
+
+    /* Apply the new configuration without a reboot. */
+    datalogger_reload();
+
+    httpd_resp_send(req, "ok", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
@@ -1573,6 +1698,24 @@ static const httpd_uri_t scan_available_pids_uri = {
     .handler   = scan_available_pids_handler,
     .user_ctx  = NULL
 };
+static const httpd_uri_t datalogger_page_uri = {
+    .uri       = "/datalogger",
+    .method    = HTTP_GET,
+    .handler   = datalogger_page_handler,
+    .user_ctx  = NULL
+};
+static const httpd_uri_t load_datalogger_uri = {
+    .uri       = "/load_datalogger",
+    .method    = HTTP_GET,
+    .handler   = load_datalogger_handler,
+    .user_ctx  = NULL
+};
+static const httpd_uri_t store_datalogger_uri = {
+    .uri       = "/store_datalogger",
+    .method    = HTTP_POST,
+    .handler   = store_datalogger_handler,
+    .user_ctx  = NULL
+};
 static void config_server_load_cfg(char *cfg)
 {
 	cJSON * root, *key = 0;
@@ -2272,6 +2415,9 @@ static httpd_handle_t config_server_init(void)
 		httpd_register_uri_handler(server, &load_car_config_uri);
 		httpd_register_uri_handler(server, &store_car_data_uri);
 		httpd_register_uri_handler(server, &scan_available_pids_uri);
+		httpd_register_uri_handler(server, &datalogger_page_uri);
+		httpd_register_uri_handler(server, &load_datalogger_uri);
+		httpd_register_uri_handler(server, &store_datalogger_uri);
 		ha_webhooks_register_handlers(server);
         #if CONFIG_EXAMPLE_BASIC_AUTH
         httpd_register_basic_auth(server);
@@ -2311,6 +2457,9 @@ void config_server_restart(void)
 		httpd_register_uri_handler(server, &load_car_config_uri);
 		httpd_register_uri_handler(server, &store_car_data_uri);
 		httpd_register_uri_handler(server, &scan_available_pids_uri);
+		httpd_register_uri_handler(server, &datalogger_page_uri);
+		httpd_register_uri_handler(server, &load_datalogger_uri);
+		httpd_register_uri_handler(server, &store_datalogger_uri);
 		ha_webhooks_register_handlers(server);
         return;
     }

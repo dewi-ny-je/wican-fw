@@ -53,6 +53,7 @@
 #include "esp_mac.h"
 #include "ftp.h"
 #include "autopid.h"
+#include "datalogger.h"
 #include "wc_mdns.h"
 #include "hw_config.h"
 #include "dev_status.h"
@@ -482,6 +483,7 @@ void app_main(void)
 		
 		elm327_init(&autopid_parser, &xmsg_obd_rx_queue, NULL);
 		autopid_init((char*)&uid[0]);
+		datalogger_init((char*)&uid[0]);
 	}
 
 	if(config_server_mqtt_en_config())
