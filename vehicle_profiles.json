@@ -123,7 +123,7 @@
       "pids": [
         {
           "pid": "22028C",
-          "pid_init": "ATSP7;ATCP17;ATCRA17FE007B;ATFCSH17FC007B;ATFCSD300000;ATFCSM1;",
+          "pid_init": "ATSP7;ATCP17;ATSHFC007B;ATFCSH17FC007B;ATCRA17FE007B;",
           "parameters": [
             {
               "name": "SOC",
@@ -155,7 +155,7 @@
         },
         {
           "pid": "22295A",
-          "pid_init": "ATSP7;ATCP17;ATCRA17FE0076;ATFCSH17FC0076;ATFCSD300000;ATFCSM1;",
+          "pid_init": "ATSP7;ATCP17;ATSHFC0076;ATCRA17FE0076;ATFCSH17FC0076;ATFCSD300000;ATFCSM1;",
           "parameters": [
             {
               "name": "ODOMETER",
@@ -204,7 +204,7 @@
         },
         {
           "pid": "222A0B1",
-          "pid_init": "ATSP7;ATCP17;ATCRA17FE007B;ATFCSH17FC007B;ATFCSD300000;ATFCSM1;",
+          "pid_init": "ATSP7;ATCP17;ATSHFC007B;ATCRA17FE007B;ATFCSH17FC007B;ATFCSD300000;ATFCSM1;",
           "parameters": [
             {
               "name": "BATT_TEMP",
@@ -244,7 +244,7 @@
         },
         {
           "pid": "227448",
-          "pid_init": "ATSP7;ATCP17;ATCRA17FE007B;ATFCSH17FC007B;ATFCSD300000;ATFCSM1;",
+          "pid_init": "ATSP7;ATCP17;ATSHFC007B;ATCRA17FE007B;ATFCSH17FC007B;ATFCSD300000;ATFCSM1;",
           "parameters": [
             {
               "name": "CHARGING",
@@ -257,7 +257,7 @@
         },
         {
           "pid": "221E3B1E3D",
-          "pid_init": "ATSP7;ATCP17;ATCRA17FE007B;ATFCSH17FC007B;ATFCSD300000;ATFCSM1;",
+          "pid_init": "ATSP7;ATCP17;ATSHFC007B;ATCRA17FE007B;ATFCSH17FC007B;ATFCSD300000;ATFCSM1;",
           "parameters": [
             {
               "name": "HV_AV",
@@ -269,7 +269,7 @@
         },
         {
           "pid": "221E3B",
-          "pid_init": "ATSP7;ATCP17;ATCRA17FE007B;ATFCSH17FC007B;ATFCSD300000;ATFCSM1;",
+          "pid_init": "ATSP7;ATCP17;ATSHFC007B;ATCRA17FE007B;ATFCSH17FC007B;ATFCSD300000;ATFCSM1;",
           "parameters": [
             {
               "name": "HV_V",
@@ -283,7 +283,7 @@
         },
         {
           "pid": "221E3D",
-          "pid_init": "ATSP7;ATCP17;ATCRA17FE007B;ATFCSH17FC007B;ATFCSD300000;ATFCSM1;",
+          "pid_init": "ATSP7;ATCP17;ATSHFC007B;ATCRA17FE007B;ATFCSH17FC007B;ATFCSD300000;ATFCSM1;",
           "parameters": [
             {
               "name": "HV_A",
@@ -366,6 +366,26 @@
               "class": "distance",
               "unit": "km",
               "min": "0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "car_model": "BT1: Hummer EV, Silverado EV, Sierra AV; BEV3: Cadillac Lyriq, Celestiq, Chevrolet Blazer EV, Equinox EV; Honda Prologue EV; Acura ZDX",
+      "init": "ATST96;",
+      "pids": [
+        {
+          "pid": "2227C6",
+          "pid_init": "ATSP7;ATCP14;ATSHDACBF1;ATCRA142AF1CB;ATFCSH14DACBF1;ATFCSD300000;ATFCSM1;",
+          "parameters": [
+            {
+              "name": "SOC",
+              "expression": "[B4:B5]/655.35",
+              "unit": "%",
+              "class": "battery",
+              "min": "0",
+              "max": "100"
             }
           ]
         }
@@ -10748,6 +10768,96 @@
       ]
     },
     {
+      "car_model": "Opel: Ampere-E 2019",
+      "init": "ATSP6;ATST96;ATSH7E0;ATSH7E1;ATSH7E4;",
+      "pids": [
+        {
+          "pid": "2283341",
+          "pid_init": "ATSH7E4",
+          "parameters": [
+            {
+              "name": "SOC",
+              "expression": "(B4*100)/255",
+              "unit": "%",
+              "class": "battery",
+              "min": "0",
+              "max": "100"
+            }
+          ]
+        },
+        {
+          "pid": "2245F9",
+          "pid_init": "ATSH7E4",
+          "parameters": [
+            {
+              "name": "HV_CAPACITY",
+              "expression": "((B4*256)+B5)/100",
+              "unit": "Ah",
+              "class": "battery"
+            },
+            {
+              "name": "HV_CAPACITY_KWH",
+              "expression": "((B4*256)+B5)*0.0032",
+              "unit": "kWh",
+              "class": "none"
+            }
+          ]
+        },
+        {
+          "pid": "22434F",
+          "pid_init": "ATSH7E4",
+          "parameters": [
+            {
+              "name": "BATT_TEMP",
+              "expression": "(B4-40)",
+              "unit": "°C",
+              "class": "temperature",
+              "min": "-40",
+              "max": "80"
+            }
+          ]
+        },
+        {
+          "pid": "224369",
+          "pid_init": "ATSH7E4",
+          "parameters": [
+            {
+              "name": "AC_C_C",
+              "expression": "B4*.2",
+              "unit": "A",
+              "class": "battery"
+            }
+          ]
+        },
+        {
+          "pid": "224368",
+          "pid_init": "ATSH7E4",
+          "parameters": [
+            {
+              "name": "AC_C_V",
+              "expression": "B4*2",
+              "unit": "V",
+              "class": "battery"
+            }
+          ]
+        },
+        {
+          "pid": "224533",
+          "pid_init": "ATSH7E4",
+          "parameters": [
+            {
+              "name": "CHARGING_R_A",
+              "expression": "B4*0.3",
+              "unit": "A",
+              "class": "current",
+              "min": "0",
+              "max": "200"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "car_model": "Opel: Astra",
       "init": "ATSP6;ATST96;ATSH79B;ATFCSH79B;ATFCSD300000;ATFCSM1;",
       "pids": [
@@ -11854,6 +11964,19 @@
               "class": "battery",
               "min": "0",
               "max": "100"
+            }
+          ]
+        },
+        {
+          "pid": "2202BD",
+          "pid_init": "ATSH7E5;",
+          "parameters": [
+            {
+              "name": "ODOMETER",
+              "expression": "((B6*65536)+(B7*256)+B9)",
+              "class": "distance",
+              "unit": "km",
+              "min": "0"
             }
           ]
         }
