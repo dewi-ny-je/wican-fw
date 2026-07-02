@@ -138,4 +138,19 @@ void autopid_request_data(void);
  * @return true if a valid (non-stale) value was found, false otherwise.
  */
 bool autopid_get_value(const char *name, float *out_value);
+
+/**
+ * @brief Get the CAN polling period (ms) of the parameter with the given name.
+ *
+ * @return true if the parameter was found.
+ */
+bool autopid_get_param_period(const char *name, uint32_t *out_period_ms);
+
+/**
+ * @brief Set the CAN polling period (ms) of the parameter with the given name.
+ *        Takes effect immediately (the parameter becomes due for polling).
+ *
+ * @return true if the parameter was found and updated.
+ */
+bool autopid_set_param_period(const char *name, uint32_t period_ms);
 #endif

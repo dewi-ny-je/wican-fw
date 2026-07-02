@@ -995,6 +995,71 @@ bool autopid_get_value(const char *name, float *out_value)
     return found;
 }
 
+bool autopid_get_param_period(const char *name, uint32_t *out_period_ms)
+{
+    bool found = false;
+
+    if (!name || !out_period_ms || !all_pids || !all_pids->mutex)
+    {
+        return false;
+    }
+
+    if (xSemaphoreTake(all_pids->mutex, pdMS_TO_TICKS(1000)) == pdTRUE)
+    {
+        for (uint32_t i = 0; i < all_pids->pid_count && !found; i++)
+        {
+            pid_data2_t *curr_pid = &all_pids->pids[i];
+            for (uint32_t j = 0; j < curr_pid->parameters_count; j++)
+            {
+                parameter_t *param = &curr_pid->parameters[j];
+                if (param->name && strcmp(param->name, name) == 0)
+                {
+                    *out_period_ms = param->period;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        xSemaphoreGive(all_pids->mutex);
+    }
+
+    return found;
+}
+
+bool autopid_set_param_period(const char *name, uint32_t period_ms)
+{
+    bool found = false;
+
+    if (!name || !all_pids || !all_pids->mutex)
+    {
+        return false;
+    }
+
+    if (xSemaphoreTake(all_pids->mutex, pdMS_TO_TICKS(1000)) == pdTRUE)
+    {
+        for (uint32_t i = 0; i < all_pids->pid_count && !found; i++)
+        {
+            pid_data2_t *curr_pid = &all_pids->pids[i];
+            for (uint32_t j = 0; j < curr_pid->parameters_count; j++)
+            {
+                parameter_t *param = &curr_pid->parameters[j];
+                if (param->name && strcmp(param->name, name) == 0)
+                {
+                    param->period = period_ms;
+                    /* Make the new period effective without waiting out the
+                     * remainder of the old interval. */
+                    param->timer = 0;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        xSemaphoreGive(all_pids->mutex);
+    }
+
+    return found;
+}
+
 void autopid_data_publish(void) {
     if (!all_pids || !all_pids->mutex) {
         ESP_LOGE(TAG, "Invalid all_pids or mutex");

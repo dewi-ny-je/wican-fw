@@ -52,6 +52,8 @@
 #define DL_SAMPLE_TICK_MS           200
 /* Minimum spacing between flush attempts, to avoid hammering a failing sink. */
 #define DL_MIN_FLUSH_INTERVAL_S     3
+/* Retry cadence for resolving autopid period overrides (see below). */
+#define DL_OVERRIDE_RETRY_S         30
 /* HTTP timeout for an Influx write. */
 #define DL_HTTP_TIMEOUT_MS          8000
 
@@ -63,9 +65,12 @@
 
 typedef struct
 {
-    char *name;         /* autopid sensor name */
-    uint32_t freq_s;    /* logging frequency, 1..60 s */
-    wc_timer_t timer;   /* next-due timer */
+    char *name;             /* autopid sensor name */
+    uint32_t freq_s;        /* logging frequency, 1..60 s */
+    wc_timer_t timer;       /* next-due timer */
+    uint32_t orig_period_ms;/* autopid period before our override */
+    bool overridden;        /* true if we tightened the autopid period */
+    bool resolved;          /* autopid period lookup succeeded */
 } dl_pid_t;
 
 typedef struct
@@ -290,6 +295,63 @@ static bool cfg_load(dl_config_t *cfg)
     return true;
 }
 
+/* Ensure the CAN bus is actually polled at least as often as each PID's
+ * logging frequency: tighten the autopid parameter period where needed,
+ * remembering the original so it can be restored on config change.
+ *
+ * The autopid task can hold its mutex for a whole polling pass, so lookups
+ * may time out; entries stay unresolved and this is retried from the task
+ * loop until every PID is handled. Returns true when all are resolved. */
+static bool apply_period_overrides(dl_config_t *cfg)
+{
+    bool all_resolved = true;
+
+    for (uint32_t i = 0; i < cfg->pid_count; i++)
+    {
+        dl_pid_t *p = &cfg->pids[i];
+        if (p->resolved)
+        {
+            continue;
+        }
+
+        uint32_t want_ms = p->freq_s * 1000;
+        uint32_t cur_ms = 0;
+
+        if (!autopid_get_param_period(p->name, &cur_ms))
+        {
+            all_resolved = false;
+            continue;
+        }
+        p->resolved = true;
+
+        if (cur_ms > want_ms)
+        {
+            if (autopid_set_param_period(p->name, want_ms))
+            {
+                p->orig_period_ms = cur_ms;
+                p->overridden = true;
+                ESP_LOGI(TAG, "PID '%s': autopid period %lu -> %lu ms",
+                         p->name, (unsigned long)cur_ms, (unsigned long)want_ms);
+            }
+        }
+    }
+
+    return all_resolved;
+}
+
+static void restore_period_overrides(dl_config_t *cfg)
+{
+    for (uint32_t i = 0; i < cfg->pid_count; i++)
+    {
+        dl_pid_t *p = &cfg->pids[i];
+        if (p->overridden)
+        {
+            autopid_set_param_period(p->name, p->orig_period_ms);
+            p->overridden = false;
+        }
+    }
+}
+
 /* ----------------------------------------------------------------------- */
 /* Buffer + line protocol                                                   */
 /* ----------------------------------------------------------------------- */
@@ -364,8 +426,13 @@ static void buf_append_sample(const char *name, float value)
     }
 
     buf_append_escaped(s_cfg.influx_measurement);
-    memcpy(s_buf + s_buf_len, ",device=", 8); s_buf_len += 8;
-    buf_append_escaped(s_device_id);
+    if (s_device_id[0])
+    {
+        /* An empty tag value is invalid line protocol and would make the
+         * server reject the whole batch, so only tag when an id is set. */
+        memcpy(s_buf + s_buf_len, ",device=", 8); s_buf_len += 8;
+        buf_append_escaped(s_device_id);
+    }
     memcpy(s_buf + s_buf_len, ",sensor=", 8); s_buf_len += 8;
     buf_append_escaped(name);
     memcpy(s_buf + s_buf_len, " value=", 7); s_buf_len += 7;
@@ -414,8 +481,11 @@ static uint8_t *gzip_compress(const uint8_t *in, size_t in_len, size_t *out_len)
 {
     z_stream strm;
     memset(&strm, 0, sizeof(strm));
-    /* 15+16 selects a gzip wrapper; Z_BEST_SPEED keeps CPU/latency low. */
-    if (deflateInit2(&strm, Z_BEST_SPEED, Z_DEFLATED, 15 + 16, 8,
+    /* windowBits 10 (+16 for a gzip wrapper) and memLevel 2 keep deflate's
+     * heap usage around 6 KB instead of the ~260 KB of the defaults, which
+     * the ESP32 cannot spare. Line-protocol records repeat every few tens of
+     * bytes, so a 1 KB window still compresses them well. */
+    if (deflateInit2(&strm, Z_BEST_SPEED, Z_DEFLATED, 10 + 16, 2,
                      Z_DEFAULT_STRATEGY) != Z_OK)
     {
         return NULL;
@@ -575,6 +645,17 @@ static bool sd_mount(void)
     return true;
 }
 
+/* Unmount after an I/O failure so a re-inserted card gets a fresh mount. */
+static void sd_recover(void)
+{
+    if (s_card)
+    {
+        esp_vfs_fat_sdcard_unmount(DL_SD_MOUNT_POINT, s_card);
+        s_card = NULL;
+    }
+    s_sd_ok = false;
+}
+
 static bool sd_append(const uint8_t *data, size_t len, bool gz)
 {
     if (!s_sd_ok && !sd_mount())
@@ -608,7 +689,7 @@ static bool sd_append(const uint8_t *data, size_t len, bool gz)
     if (!f)
     {
         ESP_LOGW(TAG, "SD open %s failed", fname);
-        s_sd_ok = false;
+        sd_recover();
         return false;
     }
 
@@ -618,7 +699,7 @@ static bool sd_append(const uint8_t *data, size_t len, bool gz)
     if (w != len)
     {
         ESP_LOGW(TAG, "SD short write (%u/%u)", (unsigned)w, (unsigned)len);
-        s_sd_ok = false;
+        sd_recover();
         return false;
     }
     ESP_LOGI(TAG, "SD flushed %u bytes to %s", (unsigned)len, fname);
@@ -657,7 +738,7 @@ static bool flush_buffer(void)
 
     bool done = false;
 
-    if (wifi_network_is_connected() && s_cfg.influx_url[0])
+    if (wifi_network_is_connected() && s_cfg.influx_url[0] && s_cfg.influx_db[0])
     {
         done = influx_upload(payload, payload_len, gz);
     }
@@ -698,10 +779,13 @@ static void datalogger_task(void *arg)
     (void)arg;
 
     cfg_load(&s_cfg);
+    bool overrides_done = !s_cfg.enabled || apply_period_overrides(&s_cfg);
     wc_timer_t flush_timer;
     wc_timer_t attempt_timer;
+    wc_timer_t override_retry_timer;
     wc_timer_set(&flush_timer, s_cfg.max_delay_s * 1000);
     wc_timer_set(&attempt_timer, DL_MIN_FLUSH_INTERVAL_S * 1000);
+    wc_timer_set(&override_retry_timer, DL_OVERRIDE_RETRY_S * 1000);
 
     for (;;)
     {
@@ -710,8 +794,10 @@ static void datalogger_task(void *arg)
             s_reload = false;
             /* Try to flush what we have before swapping config. */
             flush_buffer();
+            restore_period_overrides(&s_cfg);
             cfg_free(&s_cfg);
             cfg_load(&s_cfg);
+            overrides_done = !s_cfg.enabled || apply_period_overrides(&s_cfg);
             wc_timer_set(&flush_timer, s_cfg.max_delay_s * 1000);
         }
 
@@ -721,6 +807,23 @@ static void datalogger_task(void *arg)
         {
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
+        }
+
+        if (!overrides_done && wc_timer_is_expired(&override_retry_timer))
+        {
+            wc_timer_set(&override_retry_timer, DL_OVERRIDE_RETRY_S * 1000);
+            overrides_done = apply_period_overrides(&s_cfg);
+            if (!overrides_done)
+            {
+                for (uint32_t i = 0; i < s_cfg.pid_count; i++)
+                {
+                    if (!s_cfg.pids[i].resolved)
+                    {
+                        ESP_LOGW(TAG, "PID '%s' not found in autopid config yet",
+                                 s_cfg.pids[i].name);
+                    }
+                }
+            }
         }
 
         maybe_start_sntp();
@@ -776,7 +879,9 @@ void datalogger_init(const char *device_id)
     }
     started = true;
 
-    xTaskCreate(datalogger_task, "datalogger", 6144, NULL, 4, NULL);
+    /* The TLS handshake for the Influx upload runs on this task's stack,
+     * so it needs headroom beyond a typical worker task. */
+    xTaskCreate(datalogger_task, "datalogger", 8192, NULL, 4, NULL);
     ESP_LOGI(TAG, "datalogger task started");
 }
 
